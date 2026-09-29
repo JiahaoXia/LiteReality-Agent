@@ -34,10 +34,6 @@ An open-source, end-to-end toolkit for turning real-world scans into simulation-
 
 ## News
 
-- **2026-09-29 — GPT-6 quality gates.** New runs default to GPT-6 authoring and independent
-  visual review. Support, wall attachment, source preservation and export checks must pass;
-  bounded repairs retain failed candidates instead of reporting them as complete.
-  See [the acceptance workflow](doc/support-first-authoring.md).
 
 - 🤖 **2026-09-12 — Simulation-ready release.** Every reconstructed room now loads as a MuJoCo scene:
   objects are rigid bodies with mass, colliders and joints, and the whole room exports to URDF and MJCF.
