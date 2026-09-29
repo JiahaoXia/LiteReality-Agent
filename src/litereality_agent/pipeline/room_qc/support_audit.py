@@ -36,6 +36,10 @@ def support_graph(objects, strict=False):
     roots = {o["id"] for o in objects if o.get("category") in ROOT_CATEGORIES}
     floor = next((o["id"] for o in objects if o.get("category") == "floor"), None)
     edges, findings = {}, []
+    if not objects:
+        findings.append({"kind": "empty_layout"})
+    if len(by_id) != len(objects):
+        findings.append({"kind": "duplicate_object_id"})
     if len(by_id) != len(objects):
         findings.append({"kind": "duplicate_object_ids"})
     for o in objects:
@@ -114,79 +118,85 @@ def mesh_bodies(glb, objects):
     return {name: trimesh.util.concatenate(items) for name, items in parts.items()}
 
 
-def vertical_contacts(child, support, tolerance=0.015, sink_tolerance=0.02, flexible=False):
+def vertical_contacts(child, support, tolerance=0.015, sink_tolerance=0.02,
+                      flexible=False):
     """Downward contact rays, with underside patches for draped flexible objects.
 
-    Only upward-facing support triangles can bear weight. In particular a cupboard's
-    downward-facing bottom must not validate an object buried inside its volume.
-    """
+Only upward-facing support triangles can bear weight. In particular a cupboard's
+downward-facing bottom must not validate an object buried inside its volume.
+"""
     vertices = np.asarray(child.vertices)
     if flexible and len(child.faces):
-        underside = child.faces[np.asarray(child.face_normals)[:, 2] < -0.1]
+        underside = child.faces[np.asarray(child.face_normals)[:, 2] < -.1]
         if len(underside):
             triangles = vertices[underside]
-            weights = np.array(
-                [[1 / 3, 1 / 3, 1 / 3], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]
-            )
-            interior = np.einsum("ij,kjl->kil", weights, triangles).reshape(-1, 3)
+            weights = np.array([[1/3, 1/3, 1/3], [.6, .2, .2], [.2, .6, .2], [.2, .2, .6]])
+            interior = np.einsum('ij,kjl->kil', weights, triangles).reshape(-1, 3)
             candidates = np.vstack((vertices[np.unique(underside)], interior))
         else:
             candidates = vertices
     else:
-        candidates = vertices[vertices[:, 2] <= vertices[:, 2].min() + 0.004]
+        candidates = vertices[vertices[:, 2] <= vertices[:, 2].min() + .004]
+        # Vertex-only sampling misses the supported interior of overlapping sheets
+        # and overweights bevels. Include low underside triangle interiors too.
+        if len(child.faces):
+            triangles = vertices[child.faces]
+            low = ((np.asarray(child.face_normals)[:, 2] < -.1)
+                   & (triangles[:, :, 2].max(axis=1) <= vertices[:, 2].min() + .004))
+            weights = np.array([[1/3, 1/3, 1/3], [.6, .2, .2], [.2, .6, .2], [.2, .2, .6]])
+            interior = np.einsum('ij,kjl->kil', weights, triangles[low]).reshape(-1, 3)
+            candidates = np.vstack((candidates, interior))
     samples = np.unique(np.round(candidates, 6), axis=0)
     if len(samples) > 128:
-        samples = samples[np.linspace(0, len(samples) - 1, 128).astype(int)]
+        samples = samples[np.linspace(0, len(samples)-1, 128).astype(int)]
     if flexible:
         # Never lose real bottom contacts when a generated textile's normals are
         # inconsistent or the contact patch is small relative to its upper shell.
-        bottom = np.unique(
-            np.round(vertices[vertices[:, 2] <= vertices[:, 2].min() + 0.004], 6), axis=0
-        )
+        bottom = np.unique(np.round(vertices[vertices[:, 2] <= vertices[:, 2].min()+.004], 6), axis=0)
         if len(bottom) > 64:
-            bottom = bottom[np.linspace(0, len(bottom) - 1, 64).astype(int)]
+            bottom = bottom[np.linspace(0, len(bottom)-1, 64).astype(int)]
         samples = np.unique(np.vstack((samples, bottom)), axis=0)
-    triangles = np.asarray(support.triangles)[np.asarray(support.face_normals)[:, 2] > 0.1]
-    lo, hi = samples[:, :2].min(axis=0) - 1e-5, samples[:, :2].max(axis=0) + 1e-5
-    triangles = triangles[
-        np.all(triangles[:, :, :2].max(axis=1) >= lo, axis=1)
-        & np.all(triangles[:, :, :2].min(axis=1) <= hi, axis=1)
-    ]
+    triangles = np.asarray(support.triangles)[np.asarray(support.face_normals)[:, 2] > .1]
+    lo, hi = samples[:, :2].min(axis=0)-1e-5, samples[:, :2].max(axis=0)+1e-5
+    triangles = triangles[np.all(triangles[:, :, :2].max(axis=1) >= lo, axis=1)
+                          & np.all(triangles[:, :, :2].min(axis=1) <= hi, axis=1)]
     heights = np.full(len(samples), -np.inf)
     for start in range(0, len(triangles), 2048):
-        tri = triangles[start : start + 2048]
+        tri = triangles[start:start+2048]
         a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
-        u, v = b - a, c - a
-        det = u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]
+        u, v = b-a, c-a
+        det = u[:, 0]*v[:, 1]-u[:, 1]*v[:, 0]
         good = np.abs(det) > 1e-12
         if not good.any():
             continue
         a, u, v, det = a[good], u[good], v[good], det[good]
-        dx, dy = samples[:, None, 0] - a[None, :, 0], samples[:, None, 1] - a[None, :, 1]
-        s = (dx * v[None, :, 1] - dy * v[None, :, 0]) / det
-        t = (u[None, :, 0] * dy - u[None, :, 1] * dx) / det
-        z = a[None, :, 2] + s * u[None, :, 2] + t * v[None, :, 2]
-        hit = (s >= -1e-6) & (t >= -1e-6) & (s + t <= 1 + 1e-6)
-        hit &= z <= samples[:, None, 2] + sink_tolerance + 1e-6
+        dx, dy = samples[:, None, 0]-a[None, :, 0], samples[:, None, 1]-a[None, :, 1]
+        s = (dx*v[None, :, 1]-dy*v[None, :, 0])/det
+        t = (u[None, :, 0]*dy-u[None, :, 1]*dx)/det
+        z = a[None, :, 2]+s*u[None, :, 2]+t*v[None, :, 2]
+        hit = (s >= -1e-6) & (t >= -1e-6) & (s+t <= 1+1e-6)
+        hit &= z <= samples[:, None, 2]+sink_tolerance+1e-6
         heights = np.maximum(heights, np.where(hit, z, -np.inf).max(axis=1))
-    gaps = samples[:, 2] - heights
-    contact = np.isfinite(gaps) & (gaps <= tolerance) & (gaps >= -sink_tolerance - 1e-6)
+    gaps = samples[:, 2]-heights
+    contact = np.isfinite(gaps) & (gaps <= tolerance) & (gaps >= -sink_tolerance-1e-6)
     area = 0.0
+    center_over_contact = False
     if contact.sum() >= 3:
         from scipy.spatial import ConvexHull, QhullError
-
         try:
-            area = float(ConvexHull(samples[contact, :2]).volume)
+            hull = ConvexHull(samples[contact, :2])
+            area = float(hull.volume)
+            center = np.asarray(child.bounds).mean(axis=0)[:2]
+            center_over_contact = bool(np.all(hull.equations[:, :2] @ center
+                                             + hull.equations[:, 2] <= 1e-5))
         except QhullError:
             pass
-    return {
-        "samples": len(samples),
-        "contact_samples": int(contact.sum()),
-        "sampling": "flexible_underside" if flexible else "bottom_vertices",
-        "contact_hull_area_m2": area,
-        "contact_fraction": float(contact.mean()) if len(contact) else 0.0,
-        "minimum_gap_m": float(gaps.min()) if np.isfinite(gaps).any() else None,
-    }
+    return {'samples': len(samples), 'contact_samples': int(contact.sum()),
+            'sampling': 'flexible_underside' if flexible else 'bottom_vertices',
+            'contact_hull_area_m2': area,
+            'center_over_contact_hull': center_over_contact,
+            'contact_fraction': float(contact.mean()) if len(contact) else 0.0,
+            'minimum_gap_m': float(gaps.min()) if np.isfinite(gaps).any() else None}
 
 
 def disconnected_findings(name, child, support, *, limit=10000, pair_limit=20000):
@@ -257,6 +267,9 @@ def audit(preview: Path, legacy_report: Path | None = None, *, strict=False):
     edges, failing = support_graph(objects, strict=strict)
     bodies = mesh_bodies(preview / "Room.glb", objects)
     checks = []
+    for obj in objects:
+        if obj["id"] not in bodies:
+            failing.append({"id": obj["id"], "kind": "object_mesh_missing"})
     by_id = {o["id"]: o for o in objects}
     for name, edge in edges.items():
         target = edge["target"]
@@ -304,7 +317,8 @@ def audit(preview: Path, legacy_report: Path | None = None, *, strict=False):
                         **contacts,
                     }
                 )
-            elif not flexible and contacts["contact_fraction"] < 0.5:
+            elif (not flexible and contacts["contact_fraction"] < 0.5
+                  and not contacts["center_over_contact_hull"]):
                 failing.append(
                     {"id": name, "kind": "limited_bottom_contact", "target": target, **contacts}
                 )

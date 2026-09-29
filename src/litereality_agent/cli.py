@@ -119,7 +119,7 @@ def _author_options(args) -> dict:
     # Only pass what was actually given, so the stage keeps its own defaults for the rest.
     for name, key in (("author_profile", "profile"), ("author_steps", "step_budget"),
                       ("author_turns", "max_turns"), ("repair_rounds", "repair_rounds"),
-                      ("repair_steps", "repair_steps"), ("repair_seconds", "repair_seconds")):
+                      ("author_provider", "provider"), ("repair_steps", "repair_steps"), ("repair_seconds", "repair_seconds")):
         value = getattr(args, name, None)
         if value is not None:
             opts[key] = value
@@ -183,6 +183,8 @@ def _add_author_options(parser: argparse.ArgumentParser) -> None:
              "gate; default profile, using the codex/gpt-6 harness)",
     )
     parser.add_argument("--author-turns", type=int, help="authoring hard turn backstop (default 140)")
+    parser.add_argument("--author-provider", choices=["claude", "codex"],
+                        help="author and repair harness (default Codex/GPT-6)")
     parser.add_argument("--repair-rounds", type=int, choices=range(4), default=2,
                         help="bounded support-first repair rounds (default 2; 0 checks only)")
     parser.add_argument("--repair-steps", type=int, default=40, help="tool calls per repair (1..150)")

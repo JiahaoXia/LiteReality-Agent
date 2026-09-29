@@ -119,3 +119,32 @@ def test_enabling_dino_invalidates_cached_ingest_and_consumers(tmp_path):
     assert calls == [("ingest", {}), ("reconstruct", {}),
                      ("ingest", {"use_dino": True}), ("reconstruct", {})]
     assert all(r.status is StageStatus.REUSED for r in reused)
+
+
+def test_failed_prerequisite_is_not_resurrected_by_leftover_files(tmp_path):
+    import pytest
+
+    from litereality_agent.pipeline.runner import PipelineError
+    runner = PipelineRunner((
+        Stage('author', lambda *_: result('author', StageStatus.FAILED), is_complete=lambda _: True),
+        Stage('publish', lambda *_: result('publish'), ('author',)),
+    ))
+    ctx = context(tmp_path)
+    runner.run(ctx)
+    with pytest.raises(PipelineError, match='requires author'):
+        runner.run_stage(ctx, 'publish')
+
+
+def test_rebuilt_stale_input_invalidates_downstream_cache(tmp_path):
+    calls, current = [], {'first': True}
+    runner = PipelineRunner((
+        Stage('first', lambda *_: calls.append('first') or result('first'),
+              is_complete=lambda _: current['first']),
+        Stage('last', lambda *_: calls.append('last') or result('last'), ('first',),
+              is_complete=lambda _: True),
+    ))
+    ctx = context(tmp_path)
+    runner.run(ctx)
+    current['first'] = False
+    runner.run(ctx)
+    assert calls == ['first', 'last', 'first', 'last']

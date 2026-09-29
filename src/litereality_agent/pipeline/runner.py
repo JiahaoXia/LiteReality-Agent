@@ -88,6 +88,7 @@ class PipelineRunner:
                 dependency = self.by_name[prerequisite]
                 if (
                     prerequisite not in completed
+                    and prior.get(prerequisite, {}).get("status") != StageStatus.FAILED.value
                     and dependency.is_complete is not None
                     and dependency.is_complete(context)
                 ):
@@ -116,6 +117,10 @@ class PipelineRunner:
                 result = StageResult.from_dict(old)
                 result.status = StageStatus.REUSED
             else:
+                # Any rebuilt input invalidates its downstream results, even without --force.
+                for dependent in self.stages[self.stages.index(stage) + 1:]:
+                    prior.pop(dependent.name, None)
+                    completed.discard(dependent.name)
                 started = time.monotonic()
                 try:
                     if stage.name in force:

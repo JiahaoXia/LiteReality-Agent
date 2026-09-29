@@ -27,6 +27,7 @@ exports is usable; a room that also survives a shake is one whose supports are t
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 from litereality_agent.pipeline.context import RunContext
@@ -57,7 +58,30 @@ def source_room(context: RunContext, *, seed: bool = False):
 
 
 def complete(context: RunContext) -> bool:
-    return (scene_dir(context) / "scene.xml").is_file()
+    try:
+        receipt = json.loads((scene_dir(context) / "acceptance.json").read_text())
+        return (_report(context).get("loads_clean") is True
+                and (scene_dir(context) / "scene.xml").is_file()
+                and receipt == _inputs(context, False))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _inputs(context: RunContext, seed: bool) -> dict:
+    from litereality_agent.pipeline.realism_authoring.acceptance import fingerprint
+
+    room, preview = source_room(context, seed=seed)
+    out = scene_dir(context, seed=seed)
+    outputs = {}
+    for path in sorted(out.rglob("*")):
+        if path.is_file() and (path.suffix in {".xml", ".obj", ".stl", ".msh"}
+                               or path.name == "export_report.json"):
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            outputs[str(path.relative_to(out))] = digest.hexdigest()
+    return {"source": fingerprint(room, preview), "outputs": outputs}
 
 
 def _report_path(context: RunContext, seed: bool):
@@ -92,6 +116,8 @@ def run(context: RunContext, options: dict) -> StageResult:
         argv.append("--no-decompose")
     if options.get("reuse_meshes"):
         argv.append("--reuse-meshes")
+    _report_path(context, seed).unlink(missing_ok=True)
+    (scene_dir(context, seed=seed) / "acceptance.json").unlink(missing_ok=True)
     rc, log = run_module(context, "litereality_agent.room_ops.export.mujoco_scene", argv,
                          log_name="simulate_export_seed" if seed else "simulate_export")
     if rc or not (scene_dir(context, seed=seed) / "scene.xml").is_file():
@@ -136,6 +162,14 @@ def run(context: RunContext, options: dict) -> StageResult:
             f"sidecar — mass, friction and pivots for those came from a category table"
         )
 
+    if report.get("loads_clean") is not True:
+        reason = report.get("load_check_error") or (
+            "initial interpenetrations" if report.get("loads_clean") is False else "missing load-check verdict")
+        return StageResult("simulate", StageStatus.FAILED,
+                           error=f"exported scene is not validated for simulation: {reason}",
+                           artifacts={"scene": str(scene_dir(context, seed=seed) / "scene.xml"),
+                                      "export_report": str(_report_path(context, seed))}, warnings=warnings)
+
     if options.get("shake"):
         # The report is the run's stdout, which `run_module` tees into the log. A video is asked
         # for because a number saying "Chair0 moved 0.42 m" is not reviewable and a clip is.
@@ -144,7 +178,8 @@ def run(context: RunContext, options: dict) -> StageResult:
         shake_rc, shake_log = run_module(context, "litereality_agent.room_ops.export.mujoco_shake",
                                          shake_argv, log_name="simulate_shake")
         if shake_rc:
-            warnings.append(f"shake exited {shake_rc}; see {shake_log}")
+            return StageResult("simulate", StageStatus.FAILED,
+                               error=f"requested shake check failed; see {shake_log}", warnings=warnings)
 
     details = {"scene": str(scene_dir(context, seed=seed) / "scene.xml"),
                "source": "seed" if seed else "authored",
@@ -153,4 +188,6 @@ def run(context: RunContext, options: dict) -> StageResult:
                "derived_colliders": report.get("derived_colliders"),
                "bodies": {k: report.get(k) for k in ("structure", "free", "attached",
                                                      "articulated", "colliders")}}
+    (scene_dir(context, seed=seed) / "acceptance.json").write_text(
+        json.dumps(_inputs(context, seed), indent=2), encoding="utf-8")
     return StageResult("simulate", StageStatus.COMPLETED, details=details, warnings=warnings)

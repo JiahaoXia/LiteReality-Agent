@@ -193,12 +193,15 @@ def mesh_clashes(room: Path, glb: Path) -> list[dict] | None:
 
 
 def validate(room: Path, preview: Path | None = None) -> dict:
-    room = Path(room)
+    room = Path(room).resolve()
     preview = Path(preview) if preview else room.parent / "room_preview"
     if not (preview / "room_layout.json").is_file():
         return {"ok": False, "error": f"no build to validate: {preview / 'room_layout.json'} missing "
                                       f"(compile the room first)", "pass": False}
-    objs, layout, manifest = _load(preview)
+    try:
+        objs, layout, manifest = _load(preview)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {"ok": False, "pass": False, "error": f"invalid build metadata: {exc}"}
     floor_z = float(layout.get("bounds", {}).get("min", [0, 0, 0])[2])
     for o in objs:
         if (o.get("category") or "").lower() == "floor":
@@ -234,7 +237,7 @@ def validate(room: Path, preview: Path | None = None) -> dict:
     report = {
         "ok": True, "pass": not failing, "room": str(room), "preview": str(preview),
         "floor_z": round(floor_z, 4), "objects": len(objs), "declared_support": n_decl,
-        "counts": {"support": len(support), "overlap": len(overlaps), "articulation": len(articulated),
+        "counts": {"support": len(contact.get("support_findings", [])), "overlap": len(overlaps), "articulation": len(articulated),
                    "mesh_clash": (len(clashes) if clashes is not None else None), "open_meshes": len(manifold)},
         "support": support, "overlap": overlaps, "articulation": articulated,
         "mesh_clash": clashes, "manifold": manifold,
@@ -267,7 +270,7 @@ def main(argv=None) -> int:
     ap.add_argument("--json", type=Path, default=None, help="where to write the report (default: <preview>/validation.json)")
     a = ap.parse_args(argv)
     rep = validate(a.room, a.preview)
-    out = a.json or (Path(rep.get("preview", a.room.parent / "room_preview")) / "validation.json")
+    out = a.json or (Path(rep.get("preview", a.preview or a.room.parent / "room_preview")) / "validation.json")
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(rep, indent=1), encoding="utf-8")

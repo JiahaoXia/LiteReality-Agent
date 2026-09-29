@@ -17,7 +17,7 @@ from litereality_agent.agent import providers
 from litereality_agent.pipeline.room_qc.validate import validate
 from litereality_agent.pipeline.support import run_module
 
-SCHEMA = "support-first/1"
+SCHEMA = "support-first/2"
 
 
 def digest(path: Path) -> str:
@@ -36,6 +36,8 @@ def fingerprint(room: Path, preview: Path) -> dict:
     )
     return {
         "source": {str(p.relative_to(room)): digest(p) for p in files},
+        "checks": {p.name: digest(p) for p in [
+            Path(__file__), *(Path(__file__).parent.parent / "room_qc").glob("*.py")]},
         "build": {
             name: digest(preview / name)
             for name in ("Room.glb", "room_layout.json", "manifest.json")
@@ -89,8 +91,8 @@ def preserved_instances(seed: Path, room: Path) -> bool:
     return True
 
 
-async def repair(room: Path, scan: Path, report: Path, *, steps: int, seconds: int):
-    harness = providers.resolve("author")
+async def repair(room: Path, scan: Path, report: Path, *, steps: int, seconds: int, provider: str | None = None):
+    harness = providers.resolve("author", provider)
     spec = providers.SessionSpec(
         cwd=room,
         read_roots=(scan, report.parent),
@@ -232,7 +234,8 @@ def finish(context, options: dict) -> dict:
         try:
             asyncio.run(
                 repair(
-                    context.authored_room, context.capture_dir, path, steps=steps, seconds=seconds
+                    context.authored_room, context.capture_dir, path, steps=steps, seconds=seconds,
+                    provider=options.get("provider")
                 )
             )
         except Exception as exc:

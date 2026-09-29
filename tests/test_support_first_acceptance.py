@@ -57,7 +57,7 @@ def test_repair_loop_stops_at_cap_without_accepting(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "repair", repair)
     r = A.finish(c, {"repair_rounds": 2, "repair_steps": 7, "repair_seconds": 20})
     assert not r["accepted"] and len(calls) == 2
-    assert calls == [{"steps": 7, "seconds": 20}] * 2
+    assert calls == [{"steps": 7, "seconds": 20, "provider": None}] * 2
     assert (c.authored_room / "Room.py").is_file()
 
 
@@ -218,3 +218,64 @@ def test_visual_critic_routes_through_quality_without_fallback(monkeypatch):
     result = asyncio.run(_vlm.vision(["/tmp/image.png"], "judge", json_mode=True))
     assert result["pass"] is True and seen[0].read_only
     assert seen[0].timeout_seconds == 240
+
+
+def test_author_stage_requires_terminal_success_before_acceptance(tmp_path, monkeypatch):
+    from litereality_agent.pipeline.realism_authoring import author
+    c = context(tmp_path)
+    evidence = c.authoring_root / 'surface_ref' / 'surface_ref_manifest.json'
+    evidence.parent.mkdir()
+    evidence.write_text('{}')
+    monkeypatch.setattr(author, 'run_module', lambda *args, **kwargs: (0, None))
+    monkeypatch.setattr(A, 'finish', lambda *args: pytest.fail('incomplete session was accepted'))
+    result = author.run(c, {})
+    assert not result.ok and 'session incomplete' in result.error
+    assert (c.authored_room / 'Room.py').is_file()
+
+
+def test_normal_author_uses_open_brief_and_passes_provider_override(tmp_path, monkeypatch):
+    from litereality_agent.pipeline.realism_authoring import author
+    c = context(tmp_path)
+    evidence = c.authoring_root / 'surface_ref' / 'surface_ref_manifest.json'
+    evidence.parent.mkdir()
+    evidence.write_text('{}')
+    seen = []
+    def run(ctx, module, args, **kwargs):
+        seen.append(args)
+        (c.authoring_root / '.author_result.json').write_text('{"session_ok": true}')
+        return 0, None
+    def finish(ctx, options):
+        assert options['provider'] == 'codex'
+        return {'accepted': True}
+    monkeypatch.setattr(author, 'run_module', run)
+    monkeypatch.setattr(A, 'finish', finish)
+    assert author.run(c, {'provider': 'codex', 'step_budget': 0}).ok
+    assert seen[0][seen[0].index('--profile') + 1] == 'open'
+    assert seen[0][seen[0].index('--provider') + 1] == 'codex'
+    assert seen[0][seen[0].index('--step-budget') + 1] == 0
+
+
+def test_repair_inherits_explicit_author_provider(tmp_path, monkeypatch):
+    c = context(tmp_path)
+    seen = []
+    monkeypatch.setattr(A, 'run_module', lambda *args, **kwargs: (0, None))
+    monkeypatch.setattr(A, 'assess', lambda *args: {'accepted': False})
+    async def repair(*args, **kwargs):
+        seen.append(kwargs['provider'])
+    monkeypatch.setattr(A, 'repair', repair)
+    assert not A.finish(c, {'provider': 'claude', 'repair_rounds': 1})['accepted']
+    assert seen == ['claude']
+
+
+def test_default_authoring_roles_are_pinned_to_gpt6(monkeypatch):
+    from litereality_agent.settings import LiteRealitySettings
+    for key in ('LR_AUTHOR_PROVIDER', 'LR_MATERIALS_PROVIDER', 'LR_QUALITY_PROVIDER',
+                'LR_REFINE_PROVIDER', 'LR_PROCEDURAL_PROVIDER', 'LR_CODEX_MODEL'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('LR_AGENT_PROVIDER', 'claude')
+    settings = LiteRealitySettings(_env_file=None)
+    assert settings.codex_model == 'gpt-6-astra'
+    assert settings.codex_effort == 'high'
+    assert all(getattr(settings, role + '_provider') == 'codex'
+               for role in ('author', 'materials', 'quality', 'refine'))
+    assert settings.procedural_provider == 'claude'

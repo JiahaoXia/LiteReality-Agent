@@ -189,3 +189,40 @@ def test_contact_surface_supersedes_headboard_height_but_not_real_gap(tmp_path, 
     report = A.audit(tmp_path, legacy)
     assert not report["pass"]
     assert any(f["id"] == "Pillow" for f in report["support_findings"])
+
+
+def test_partially_overlapping_sheet_samples_supported_face_interior():
+    base = box((1, 1, .001), (0, 0, .0005))
+    sheet = box((1, 1, .001), (.1, .1, .0015))
+    check = vertical_contacts(sheet, base, tolerance=.005, sink_tolerance=.005)
+    assert check['contact_samples'] > 1
+    assert check['center_over_contact_hull']
+
+
+def test_many_bevel_vertices_do_not_reject_supported_four_feet():
+    floor = box((3, 3, .1), (0, 0, -.05))
+    legs = trimesh.util.concatenate([
+        box((.05, .05, .5), (x, y, .254)) for x in [-.4, .4] for y in [-.4, .4]])
+    check = vertical_contacts(legs, floor, tolerance=.005, sink_tolerance=.005)
+    assert check['center_over_contact_hull']
+
+
+def test_contact_patch_off_to_one_side_does_not_cover_object_center():
+    support = box((.1, 1, .1), (-.45, 0, -.05))
+    child = box((1, 1, .1), (0, 0, .05))
+    check = vertical_contacts(child, support)
+    assert not check['center_over_contact_hull']
+
+
+def test_empty_or_duplicate_layout_cannot_claim_complete_coverage():
+    assert support_graph([], strict=True)[1] == [{'kind': 'empty_layout'}]
+    _, findings = support_graph([{'id': 'Floor', 'category': 'floor'}] * 2, strict=True)
+    assert {'kind': 'duplicate_object_id'} in findings
+
+
+def test_structural_root_without_geometry_is_not_a_pass(tmp_path, monkeypatch):
+    (tmp_path / 'room_layout.json').write_text(json.dumps({'objects': [
+        {'id': 'Floor', 'category': 'floor'}]}))
+    monkeypatch.setattr(A, 'mesh_bodies', lambda *args: {})
+    assert A.audit(tmp_path, strict=True)['support_findings'] == [
+        {'id': 'Floor', 'kind': 'object_mesh_missing'}]

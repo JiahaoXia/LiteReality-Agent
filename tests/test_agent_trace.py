@@ -101,6 +101,7 @@ def test_author_attributes_a_successful_stitch_read(tmp_path, monkeypatch, capsy
             use = ToolUseBlock(id="read-1", name="Read", input={"file_path": str(stitch)})
             result = ToolResultBlock(tool_use_id="read-1", content="ok", is_error=False)
             yield SimpleNamespace(content=[use, result])
+            yield providers.SessionResult(result="done")
 
     monkeypatch.setattr(author, "surfaces_for", lambda _room: ["Wall0"])
     monkeypatch.setattr(providers, "resolve", lambda *_args: ReadHarness())

@@ -358,6 +358,7 @@ async def refine_one(name: str, room: Path, refroot: Path, scan: Path, blender: 
     # under load. Retry the object up to _RETRIES times (its edits so far persist on disk).
     last_err = None
     for attempt in range(1, _RETRIES + 1):
+        terminal_ok = False
         try:
             async with _SEM:
                 async for m in harness.run(spec):
@@ -370,10 +371,11 @@ async def refine_one(name: str, room: Path, refroot: Path, scan: Path, blender: 
                             hint = hint_for(nm, getattr(block, "input", {}) or {}, 34)
                             print(f"  [{name}] {nm:<14} {hint}".rstrip(), flush=True)
                     if isinstance(m, providers.SessionResult):
+                        terminal_ok = not m.is_error and not m.stopped
                         summary = m.result or ""
                         cost = m.total_cost_usd
-                        if m.stopped or m.is_error:
-                            raise RuntimeError(f"refinement incomplete: {m.stopped or m.result}")
+            if not terminal_ok:
+                raise RuntimeError("refinement session incomplete: " + summary[:200])
             last_err = None
             break  # session completed
         except Exception as e:  # noqa: BLE001 — a failed object must not kill the scene
@@ -534,6 +536,7 @@ async def main():
         # those as partial, with their delta — calling them a bare ERROR hides real work and makes
         # a tuning problem (turn cap) look like a broken stage.
         if r.get("error") and r.get("partial"):
+            n_err += 1
             print(f"  {n}: ~ PARTIAL — code Δ +{d.get('added', '?')}/-{d.get('removed', '?')} "
                   f"then {str(r['error'])[:160]}")
             continue
@@ -553,6 +556,8 @@ async def main():
     if combined:
         print(f"\n== before/after: {combined}  (per-object sheets + .diff in {RESULTS / '_beforeafter'}) ==")
 
+    return 1 if n_err else 0
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

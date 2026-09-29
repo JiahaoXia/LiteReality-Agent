@@ -238,13 +238,14 @@ async def run(room: Path, surface_ref: Path, scan: Path, refroot: Path, model: s
         pass
     t0 = time.monotonic()
     result_text, cost = "", None
+    terminal_ok = False
     from litereality_agent.agent import scratch
     from litereality_agent.agent.tool_narration import ToolNarrator, hint_for
     scratch_at = scratch.bind(near=room)   # this pass's own run_NNN dir
     nar = ToolNarrator()
     from litereality_agent.agent.trace import AgentTrace
     tr = AgentTrace("qc", room=room, scan=scan.name)
-    tr.start(model=harness.effective_model(spec), role_model=model, room=str(room),
+    tr.start(model=harness.effective_model(spec), provider=harness.name, role_model=model, room=str(room),
              scratch=str(scratch_at) if scratch_at else None)
     async for m in harness.run(spec):
         tr.raw(getattr(m, "raw", None) if getattr(m, "raw", None) is not None else m)
@@ -276,6 +277,7 @@ async def run(room: Path, surface_ref: Path, scan: Path, refroot: Path, model: s
                 if failed:
                     print(failed, flush=True)
         if isinstance(m, providers.SessionResult):
+            terminal_ok = not m.is_error and not m.stopped
             result_text = m.result or ""
             cost = m.total_cost_usd
     dt = round(time.monotonic() - t0, 1)
@@ -294,6 +296,10 @@ async def run(room: Path, surface_ref: Path, scan: Path, refroot: Path, model: s
     print(f"\n== QC done {int(dt // 60)}m{int(dt % 60):02d}s | calls={calls} {counts} | cost=${cost} ==\n",
           flush=True)
     print("SUMMARY:\n" + result_text[:3000], flush=True)
+
+    if not terminal_ok:
+        print("quality session did not finish successfully; partial edits preserved", flush=True)
+    return 0 if terminal_ok else 1
 
 
 def main():
@@ -315,9 +321,9 @@ def main():
     extra = a.extra
     if a.extra_file:
         extra = Path(a.extra_file).read_text()
-    asyncio.run(run(Path(a.room), Path(a.surface_ref), Path(a.scan), Path(a.refroot),
+    return asyncio.run(run(Path(a.room), Path(a.surface_ref), Path(a.scan), Path(a.refroot),
                     a.model, a.max_turns, extra, provider=a.provider))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

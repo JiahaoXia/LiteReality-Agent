@@ -17,7 +17,7 @@ budget stops and incomplete reviews do not produce an accepted scene. A plain
 `Room.py` or `Room.glb` on disk is no longer sufficient to reuse a completed stage.
 
 `room_preview/author_acceptance.json` and `acceptance.json` bind acceptance to SHA256
-hashes of the source files, GLB, layout and manifest. Changing any of them invalidates
+hashes of the source files, GLB, layout, manifest and validation code. Changing any of them invalidates
 completion. Old stage-state records cannot bypass this check. Failed candidates
 remain on disk for inspection; the stage reports `failed` with `needs_repair`.
 They may be deliberately shared for review, but are not accepted deliverables.
@@ -85,3 +85,29 @@ After a finished/failed attempt, `--resume` reuses completed stages without rege
 assets, retaining attempt history and checking both capture copies against the original
 hashes. Codex MCP tools explicitly inherit the run's scene/output/model settings so an
 isolated output directory resolves just as the default `run/` does.
+
+## Integration hardening
+
+Authoring and all requested polish passes require a successful terminal provider result. Missing
+terminal events, explicit errors and budget stops retain partial work and fail the stage. Session
+records name the actual provider/model. `--author-provider` overrides the initial author and its
+repair sessions; quality review uses its independently configured role.
+
+Object recipes now build to a temporary GLB and replace the cache only after success. Blender
+Python exceptions have a nonzero exit code, and failed object builds stop room assembly. Source
+or exported-geometry changes invalidate acceptance; failed stages cannot be resurrected merely
+because old files remain on disk.
+
+Simulation is still optional. If requested, its exported scene must load without the exporter's
+initial-overlap violations; missing/failed load checks and requested shake failures fail that
+stage. Acceptance covers the source, XML, collider meshes and export report. Add `--strict` to
+make simulation failure fatal to the whole pipeline.
+
+These defaults enforce a minimum acceptance standard for future scenes; they do not promise
+that every capture converges within one budget. The recorded lab test passed geometric checks
+but did not pass visual acceptance. The combined release is verified with offline regression
+tests and a real Blender motion/export test; it has not completed a new paid end-to-end scan.
+
+Combined integration verification (2026-09-29): 766 offline tests passed, two skipped,
+ten opt-in tests deselected; full repository Ruff checks passed. The real Blender support-motion
+and GLB hierarchy test passed separately. One existing trimesh inertia warning remains.

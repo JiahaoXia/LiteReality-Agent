@@ -540,6 +540,11 @@ async def run(room: Path, surface_ref: Path, scan: Path, model: str, max_turns: 
                  python=sys.executable, blender=_blender_bin(),
                  scratch=str(scratch_at) if scratch_at else str(room.parent / "_scratch"))
     prompt = PROFILES.get(profile, PROMPT).format(**fills)
+    prompt += "\nBefore finishing, compile and run " + sys.executable + (
+        " -m litereality_agent.pipeline.room_qc.validate --room ."
+        + " Read validation.json and fix every blocking finding. Wall attachments need actual "
+        "mesh contact; support chains must reach structural geometry. Preserve source objects "
+        "and their articulation. A missing check is not a pass.\n")
     prompt += scratch.prompt_line()
     from litereality_agent.agent.tool_narration import describe_tools_line
     prompt += describe_tools_line()
@@ -586,6 +591,7 @@ async def run(room: Path, surface_ref: Path, scan: Path, model: str, max_turns: 
     t0 = time.monotonic()
     result_text, cost = "", None
     terminal_error = ""
+    terminal_seen = False
     # Names and inputs live on ToolUseBlock only; the narrator holds the id→call map so a
     # ToolResultBlock can be attributed back. See tool_narration.py for what reading them off the
     # result block cost us.
@@ -645,6 +651,7 @@ async def run(room: Path, surface_ref: Path, scan: Path, model: str, max_turns: 
                 elif name in ("Edit", "Write", "Bash"):
                     checkpoint(room, last_good)
         if isinstance(m, providers.SessionResult):
+            terminal_seen = True
             result_text = m.result or ""
             cost = m.total_cost_usd
             stopped = m.stopped
@@ -679,6 +686,8 @@ async def run(room: Path, surface_ref: Path, scan: Path, model: str, max_turns: 
         print(f"\n  ⏹ authoring stopped on {ended_early} "
               f"({nar.calls} tool-calls) — Room.py kept as-is.", flush=True)
         tr.think(f"[step budget] {ended_early}")
+    if not terminal_seen and not ended_early:
+        terminal_error = "provider stream ended without a terminal result"
     dt = round(time.monotonic() - t0, 1)
     calls, counts = nar.calls, nar.counts
 
@@ -698,6 +707,8 @@ async def run(room: Path, surface_ref: Path, scan: Path, model: str, max_turns: 
     try:
         (room.parent / ".author_result.json").write_text(json.dumps({
             "ended_early": ended_early, "calls": calls, "step_budget": step_budget,
+            "session_ok": terminal_seen and not ended_early and not terminal_error and not broken,
+            "provider": harness.name, "model": used, "terminal_error": terminal_error,
         }), encoding="utf-8")
     except OSError:
         pass                                    # a summary that cannot be written is not fatal

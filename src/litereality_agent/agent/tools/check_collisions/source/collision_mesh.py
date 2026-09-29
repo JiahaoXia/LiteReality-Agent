@@ -114,6 +114,8 @@ def build_bodies(glb_path: str | Path, shell: dict) -> dict:
     furniture = {k: v for k, v in furniture.items() if v is not None}
     return {
         "structure": _concat(structure_meshes),
+        "walls": {h: _concat([m for _, m in parts.get(h, [])])
+                  for h in structure_h if h.startswith("Wall") and parts.get(h)},
         "floor": _concat([m for h in floor_h for _, m in parts.get(h, [])]),
         "furniture": furniture,
         "leaves": leaves,
@@ -239,62 +241,82 @@ def check_all(bodies: dict, shell: dict) -> list[dict]:
 
 
 def wall_penetrations(bodies: dict, shell: dict, *, tol: float = 0.04) -> list[dict]:
-    """Furniture whose MESH EXTENT crosses a wall plane to the exterior (a table poking THROUGH a
-    wall). The box checks miss this: they test the object CENTRE, and these walls are ~0 mm thick, so
-    a piece whose centre is inside but whose body pokes out is never flagged. This scans the object's
-    real vertices against each wall plane and reports how far the deepest one crosses to the outside,
-    with a SHELL-frame snap-INWARD fix. A piece merely flush against a wall (crossing < tol) is fine.
+    """Check finite, opening-cut wall meshes on either side of internal partitions.
 
-    Walls come from the SHELL (plan frame); map to the glb plan via SHELL(x, y) → glb(x, -y)."""
-    walls = shell.get("walls") or {}
-    pts = [(p[0], -p[1]) for w in walls.values() for p in (w.get("start"), w.get("end")) if p]
-    if not pts:
-        return []
-    fcx = sum(p[0] for p in pts) / len(pts)
-    fcz = sum(p[1] for p in pts) / len(pts)
+    A multi-room scan has furniture on both sides of partitions. A signed distance
+    to an infinite wall half-space is therefore not a collision test. Require
+    actual mesh contact and more than ``tol`` overlap through the wall thickness.
+    The contact test also respects the exported doorway/window cutouts.
+    """
+    import numpy as np
+    from trimesh.collision import CollisionManager
 
+    wall_meshes = bodies.get("walls") or {}
+    if not wall_meshes:
+        # Keep old callers supported, but do not call remote opposite-side objects
+        # penetrations: a crossing must straddle the finite wall plane.
+        findings = []
+        for oid, mesh in bodies["furniture"].items():
+            V = mesh.vertices
+            for wid, w in (shell.get("walls") or {}).items():
+                start, end = w.get("start"), w.get("end")
+                if not start or not end:
+                    continue
+                s = np.array([start[0], -start[1]])
+                delta = np.array([end[0], -end[1]]) - s
+                length = float(np.linalg.norm(delta))
+                if length < 1e-6:
+                    continue
+                along = delta / length
+                normal = np.array([-along[1], along[0]])
+                relative = V[:, [0, 2]] - s
+                t, d = relative @ along, relative @ normal
+                span = (t >= 0) & (t <= length)
+                if span.any() and d[span].min() < -tol and d[span].max() > tol:
+                    findings.append({"id": oid, "kind": "wall_clash", "wall": wid,
+                                     "penetration_m": round(float(min(-d[span].min(), d[span].max())), 3)})
+        return findings
+
+    manager = CollisionManager()
+    for wid, mesh in wall_meshes.items():
+        manager.add_object(wid, mesh)
     findings = []
-    for oid, m in bodies["furniture"].items():
-        V = m.vertices  # glb (x, y, z); plan = (x, z)
+    for oid, mesh in bodies["furniture"].items():
+        hit, names = manager.in_collision_single(mesh, return_names=True)
+        if not hit:
+            continue
         best = None
-        for wid, w in walls.items():
-            s, e = w.get("start"), w.get("end")
-            if not s or not e:
+        for wid in names:
+            w = (shell.get("walls") or {}).get(wid)
+            if not w:
                 continue
-            sx, sz, ex, ez = s[0], -s[1], e[0], -e[1]
-            dx, dz = ex - sx, ez - sz
-            L = math.hypot(dx, dz)
-            if L < 1e-6:
+            start, end = w["start"], w["end"]
+            delta = np.array([end[0] - start[0], -(end[1] - start[1])])
+            length = float(np.linalg.norm(delta))
+            if length < 1e-6:
                 continue
-            ux, uz = dx / L, dz / L
-            nx, nz = -uz, ux
-            if (fcx - sx) * nx + (fcz - sz) * nz < 0:  # orient the normal toward the room interior
-                nx, nz = -nx, -nz
-            rx, rz = V[:, 0] - sx, V[:, 2] - sz
-            d = rx * nx + rz * nz          # >0 interior of this wall, <0 poked through to exterior
-            t = (rx * ux + rz * uz) / L    # position along the wall span
-            span = (t >= -0.05) & (t <= 1.05)
-            if not span.any():
+            normal = np.array([-delta[1], delta[0]]) / length
+            furniture_d = mesh.vertices[:, [0, 2]] @ normal
+            wall_d = wall_meshes[wid].vertices[:, [0, 2]] @ normal
+            flo, fhi = float(furniture_d.min()), float(furniture_d.max())
+            wlo, whi = float(wall_d.min()), float(wall_d.max())
+            overlap = min(fhi, whi) - max(flo, wlo)
+            if overlap <= tol:
                 continue
-            pen = float((-d)[span].max())  # deepest exterior crossing within the wall's span
-            if pen > tol and (best is None or pen > best[1]):
-                best = (wid, pen, (nx, nz))
+            # Separation is the smaller distance to either physical face.
+            negative_move, positive_move = fhi - wlo, whi - flo
+            direction = -normal if negative_move < positive_move else normal
+            distance = min(negative_move, positive_move) + 0.002
+            if best is None or overlap > best[1]:
+                best = (wid, overlap, direction, distance)
         if best:
-            wid, pen, (nx, nz) = best
-            mv = pen + 0.02
-            sdx, sdy = glb_to_shell_xy(nx * mv, nz * mv)  # snap interior, in the SHELL plane
-            findings.append({
-                "id": oid,
-                "kind": "wall_clash",
-                "wall": wid,
-                "penetration_m": round(pen, 3),
-                "fix": {
-                    "snap_to_wall": {"id": oid, "world_dxdy": [round(sdx, 3), round(sdy, 3)],
-                                     "dist_m": round(mv, 3)},
-                    "or_resize": {"shrink_m": round(pen, 3),
-                                  "note": f"trim {oid} depth so it clears {wid}"},
-                },
-            })
+            wid, overlap, direction, distance = best
+            dx, dy = glb_to_shell_xy(*(direction * distance))
+            findings.append({"id": oid, "kind": "wall_clash", "wall": wid,
+                             "penetration_m": round(overlap, 3),
+                             "fix": {"snap_to_wall": {"id": oid,
+                                     "world_dxdy": [round(dx, 3), round(dy, 3)],
+                                     "dist_m": round(distance, 3)}}})
     return findings
 
 

@@ -47,10 +47,13 @@ def run(context: RunContext, options: dict) -> StageResult:
         "--scan", context.capture_dir,
         "--profile", options.get("profile", "open"),
     ]
+    if options.get("provider"):
+        args += ["--provider", options["provider"]]
     # Budgets only when asked for: the entrypoint knows each profile's own defaults.
     for key, flag in (("max_turns", "--max-turns"), ("step_budget", "--step-budget")):
-        if options.get(key):
+        if options.get(key) is not None:
             args += [flag, options[key]]
+    (context.authoring_root / ".author_result.json").unlink(missing_ok=True)
     rc, log = run_module(
         context,
         "litereality_agent.pipeline.realism_authoring.author.entrypoint",
@@ -73,15 +76,10 @@ def run(context: RunContext, options: dict) -> StageResult:
             (context.authored_room.parent / ".author_result.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         summary = {}
-    if summary.get("ended_early"):
-        result.warnings.append(
-            f"authoring stopped on {summary['ended_early']} after "
-            f"{summary.get('calls', '?')} tool-calls (budget "
-            f"{summary.get('step_budget', '?')}) — the room is as far as it got, not finished. "
-            f"Raise it with --author-steps."
-        )
+    result.details["session"] = summary
+    if summary.get("session_ok") is not True:
         result.status = StageStatus.FAILED
-        result.error = "needs_repair: authoring session stopped early; saved room retained"
+        result.error = "needs_repair: authoring session incomplete; saved room retained"
         return result
 
     # THE GATE. Whatever the brief asked for, the question at the end is the same: could a physics

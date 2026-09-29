@@ -25,6 +25,8 @@ def _built_room(context: RunContext) -> None:
     (context.authored_room / "Room.py").write_text("SHELL = {}\n")
     context.preview_dir.mkdir(parents=True, exist_ok=True)
     (context.preview_dir / "Room.glb").write_bytes(b"glTF")
+    (context.preview_dir / "room_layout.json").write_text('{"objects": []}')
+    (context.preview_dir / "manifest.json").write_text('{"assets": []}')
 
 
 def _exports(context: RunContext, report: dict):
@@ -53,7 +55,7 @@ def test_objects_without_compiled_physics_are_reported_not_buried(context, monke
     difference between physics that came from the assets and physics invented at export time."""
     _built_room(context)
     monkeypatch.setattr(simulate, "run_module",
-                        _exports(context, {"from_sidecar": ["Table0"],
+                        _exports(context, {"loads_clean": True, "from_sidecar": ["Table0"],
                                            "no_sidecar": ["Mug0", "Cable0"],
                                            "placement_rejected": ["Chair1: colliders land 0.4 m"],
                                            "structure": 12, "free": 4, "attached": 2,
@@ -69,7 +71,7 @@ def test_objects_without_compiled_physics_are_reported_not_buried(context, monke
 def test_a_clean_export_warns_about_nothing(context, monkeypatch):
     _built_room(context)
     monkeypatch.setattr(simulate, "run_module",
-                        _exports(context, {"from_sidecar": ["Table0", "Chair0"],
+                        _exports(context, {"loads_clean": True, "from_sidecar": ["Table0", "Chair0"],
                                            "structure": 12, "free": 4, "attached": 2,
                                            "articulated": 1, "colliders": 40}))
     result = simulate.run(context, {})
@@ -87,7 +89,7 @@ def test_the_shake_is_opt_in_because_it_is_a_measurement_and_costs_minutes(conte
         out = simulate.scene_dir(context)
         out.mkdir(parents=True, exist_ok=True)
         (out / "scene.xml").write_text("<mujoco/>")
-        (out / "export_report.json").write_text("{}")
+        (out / "export_report.json").write_text('{"loads_clean": true}')
         return 0, out / "log"
 
     monkeypatch.setattr(simulate, "run_module", record)
@@ -106,6 +108,8 @@ def _seeded(context: RunContext) -> None:
     preview = context.seed_room.parent / "room_preview"
     preview.mkdir(parents=True, exist_ok=True)
     (preview / "Room.glb").write_bytes(b"glTF")
+    (preview / "room_layout.json").write_text('{"objects": []}')
+    (preview / "manifest.json").write_text('{"assets": []}')
 
 
 def test_from_seed_exports_the_unauthored_room(context, monkeypatch):
@@ -120,7 +124,7 @@ def test_from_seed_exports_the_unauthored_room(context, monkeypatch):
         out = simulate.scene_dir(context, seed=True)
         out.mkdir(parents=True, exist_ok=True)
         (out / "scene.xml").write_text("<mujoco/>")
-        (out / "export_report.json").write_text('{"from_sidecar": ["Table0"]}')
+        (out / "export_report.json").write_text('{"loads_clean": true, "from_sidecar": ["Table0"]}')
         return 0, out / "log"
 
     monkeypatch.setattr(simulate, "run_module", record)
@@ -138,3 +142,50 @@ def test_from_seed_asks_for_seed_rather_than_author_when_the_room_is_missing(con
     result = simulate.run(context, {"from_seed": True})
     assert result.status is StageStatus.FAILED
     assert "seed" in result.error and "author" not in result.error
+
+
+@pytest.mark.parametrize('report', [{}, {'loads_clean': False},
+    {'loads_clean': None, 'load_check_error': 'coplanar mesh'}])
+def test_unloadable_unchecked_or_interpenetrating_scene_fails(context, monkeypatch, report):
+    _built_room(context)
+    monkeypatch.setattr(simulate, 'run_module', _exports(context, report))
+    result = simulate.run(context, {})
+    assert result.status is StageStatus.FAILED
+    assert not simulate.complete(context)
+
+
+def test_old_load_verdict_is_not_reused_for_new_export(context, monkeypatch):
+    _built_room(context)
+    _exports(context, {'loads_clean': True})(None, None)
+    def no_report(*args, **kw):
+        return 0, 'export.log'
+    monkeypatch.setattr(simulate, 'run_module', no_report)
+    assert simulate.run(context, {}).status is StageStatus.FAILED
+
+
+def test_requested_shake_failure_fails_stage(context, monkeypatch):
+    _built_room(context)
+    export = _exports(context, {'loads_clean': True})
+    def run(ctx, module, args, **kwargs):
+        if module.endswith('mujoco_shake'):
+            return 1, 'shake.log'
+        return export(ctx, module, args, **kwargs)
+    monkeypatch.setattr(simulate, 'run_module', run)
+    assert simulate.run(context, {'shake': True}).status is StageStatus.FAILED
+
+
+def test_changed_simulator_mesh_invalidates_acceptance(context, monkeypatch):
+    _built_room(context)
+    monkeypatch.setattr(simulate, 'run_module', _exports(context, {'loads_clean': True}))
+    assert simulate.run(context, {}).ok
+    assert simulate.complete(context)
+    (simulate.scene_dir(context) / 'body.obj').write_text('v 0 0 0')
+    assert not simulate.complete(context)
+
+
+def test_changed_room_invalidates_simulation_acceptance(context, monkeypatch):
+    _built_room(context)
+    monkeypatch.setattr(simulate, 'run_module', _exports(context, {'loads_clean': True}))
+    assert simulate.run(context, {}).ok
+    (context.authored_room / 'Room.py').write_text('SHELL = {"changed": True}')
+    assert not simulate.complete(context)

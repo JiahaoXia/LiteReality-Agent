@@ -12,6 +12,7 @@ builds `Room.py`, so it must be valid Python. That is what these pin.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -227,6 +228,8 @@ def test_polish_passes_remain_in_the_author_flow(tmp_path: Path, monkeypatch):
 
     def fake_run_module(_context, module, args, *, log_name=None):
         calls.append((module, list(args), log_name))
+        if module.endswith("entrypoint"):
+            (context.authoring_root / ".author_result.json").write_text('{"session_ok": true}')
         return 0, None
 
     monkeypatch.setattr(author, "run_module", fake_run_module)
@@ -247,7 +250,20 @@ def test_polish_passes_remain_in_the_author_flow(tmp_path: Path, monkeypatch):
         "litereality_agent.pipeline.realism_authoring.author.materials",
         "litereality_agent.pipeline.realism_authoring.author.quality",
     ]
-    # After the passes, the gate: a build (nothing here produced room_preview/) so it has
-    # something to judge. The gate itself only runs once a layout exists, which the fake
-    # build does not write — so the build is the last call here.
     assert modules[4:] == ["support-first acceptance"]
+
+
+def test_missing_terminal_result_is_not_success(room, tmp_path, monkeypatch):
+    assert _run_with_result(room, tmp_path, monkeypatch, None) == 1
+    report = json.loads((room.parent / '.author_result.json').read_text())
+    assert report['session_ok'] is False
+    assert 'terminal result' in report['terminal_error']
+
+
+def test_budget_stop_is_saved_as_incomplete(room, tmp_path, monkeypatch):
+    from litereality_agent.agent.providers import SessionResult
+    _run_with_result(room, tmp_path, monkeypatch, SessionResult(stopped='step budget'))
+    report = json.loads((room.parent / '.author_result.json').read_text())
+    assert report['session_ok'] is False
+    assert report['ended_early'] == 'step budget'
+    assert (room / 'Room.py').is_file()

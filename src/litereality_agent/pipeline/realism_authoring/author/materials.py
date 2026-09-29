@@ -200,12 +200,14 @@ async def run(room: Path, surface_ref: Path, scan: Path, refroot: Path, model: s
     nar = ToolNarrator()
     from litereality_agent.agent.trace import AgentTrace
     tr = AgentTrace('materials', room=room, scan=scan.name)
-    tr.start(model=harness.effective_model(spec), role_model=model, room=str(room), scratch=str(scratch_at) if scratch_at else None)
+    tr.start(model=harness.effective_model(spec), provider=harness.name, role_model=model, room=str(room), scratch=str(scratch_at) if scratch_at else None)
     t0 = time.time()
     summary = ""
+    terminal_ok = False
     async for msg in harness.run(spec):
         tr.raw(getattr(msg, "raw", None) if getattr(msg, "raw", None) is not None else msg)
         if isinstance(msg, providers.SessionResult):
+            terminal_ok = not msg.is_error and not msg.stopped
             summary = (msg.result or "")[:2000]
         for blk in getattr(msg, "content", []) or []:
             kind = type(blk).__name__
@@ -227,10 +229,12 @@ async def run(room: Path, surface_ref: Path, scan: Path, refroot: Path, model: s
     if summary:
         print(summary)
     try:
-        telemetry.event("materials_pass", scan=scan.name, status="ok", seconds=round(dt, 1))
+        telemetry.event("materials_pass", scan=scan.name, status="ok" if terminal_ok else "failed", seconds=round(dt, 1))
     except Exception:  # noqa: BLE001 — telemetry must not fail an authoring pass
         pass
-    return 0
+    if not terminal_ok:
+        print("materials session did not finish successfully; partial edits preserved", flush=True)
+    return 0 if terminal_ok else 1
 
 
 def main():

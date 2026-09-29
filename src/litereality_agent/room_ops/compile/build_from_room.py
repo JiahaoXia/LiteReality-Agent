@@ -61,11 +61,27 @@ def run_object_py(
         print(console.row("error", name, "no object.py — nothing to build from", "cyan"))
         return False
     out_glb.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [blender, "-b", "--python-exit-code", "1", "--python", str(script), "--", str(texdir), str(out_glb)]
+    # Blender can exit zero after a Python error. Build away from the cache so an
+    # old GLB cannot impersonate the result of a failed regeneration.
+    import tempfile
+
+    staging = tempfile.TemporaryDirectory(prefix=f".{name}-build-", dir=out_glb.parent)
+    candidate = Path(staging.name) / out_glb.name
+    cmd = [blender, "-b", "--python-exit-code", "1", "--python", str(script),
+           "--", str(texdir), str(candidate)]
     t0 = time.time()
-    r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        valid = (r.returncode == 0 and candidate.is_file() and candidate.stat().st_size >= 20)
+        if valid:
+            with candidate.open("rb") as stream:
+                valid = stream.read(4) == b"glTF"
+        if valid:
+            candidate.replace(out_glb)
+    finally:
+        staging.cleanup()
     took = f"{console.colour('dim')}{time.time() - t0:5.1f}s{console.colour('off')}"
-    if r.returncode != 0 or not out_glb.exists():
+    if not valid:
         tail = r.stderr.decode(errors="replace").strip().splitlines()[-1:] or ["(no stderr)"]
         print(console.row("error", name, f"{'regen' if is_proc else 'wrap'} FAILED — {tail[0][:60]}",
                           "cyan"))
@@ -157,6 +173,10 @@ def main() -> int:
         e["glb"] = f"Object/{name}.glb"
         pv_manifest["assets"].append(e)
 
+    if failed:
+        print(console.row("error", "objects", f"failed to build: {', '.join(failed)}", "yellow"))
+        return 1
+
     # 1b. ROOM-LEVEL materials (walls/floor/ceiling PBR the authoring fetched): re-materialize from
     # the room's textures.json recipe into <roomdir>/materials, so a COMPACT room definition that
     # ships the RECIPE only (no image binaries) still rebuilds. Room.py's MAT_DIR = <roomdir>/materials.
@@ -187,7 +207,8 @@ def main() -> int:
     cmd = [
         blender,
         "-b",
-        "--python-exit-code", "1",
+        "--python-exit-code",
+        "1",
         "--python",
         str(roomdir / "Room.py"),
         "--",

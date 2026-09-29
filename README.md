@@ -34,6 +34,11 @@ An open-source, end-to-end toolkit for turning real-world scans into simulation-
 
 ## News
 
+- **2026-09-29 — GPT-6 quality gates.** New runs default to GPT-6 authoring and independent
+  visual review. Support, wall attachment, source preservation and export checks must pass;
+  bounded repairs retain failed candidates instead of reporting them as complete.
+  See [the acceptance workflow](doc/support-first-authoring.md).
+
 - 🤖 **2026-09-12 — Simulation-ready release.** Every reconstructed room now loads as a MuJoCo scene:
   objects are rigid bodies with mass, colliders and joints, and the whole room exports to URDF and MJCF.
 - ⚙️ **2026-09-09 — Procedural reconstruction with sim-ready physics.** Articulated objects now carry
@@ -68,9 +73,10 @@ Tested on **macOS** (Apple Silicon) and **Linux** (with a >=24 GB GPU).
 2. **Blender 5.x** (tested on 5.1). `BLENDER_PATH` points at the install *directory*, not the binary.
 3. **An image-generation API key** for reference images — typically under $1 per scene.
    `OPENAI_API_KEY` by default, or `GEMINI_API_KEY` with `LR_IMAGE_PROVIDER=gemini`.
-4. **A logged-in agent CLI on your `PATH`** — this drives all reasoning. `claude`
-   (Claude Code) is the default; `codex` (OpenAI Codex) is also supported, selected with
-   `LR_AGENT_PROVIDER` in `models.env`.
+4. **Logged-in agent CLIs on your `PATH`.** `codex` with GPT-6 is the default for room
+   authoring, materials, object refinement and independent visual review. `claude` remains the
+   default for reconstruction reasoning and procedural asset initialization. Per-role overrides
+   are in `models.env`; see [support-first authoring](doc/support-first-authoring.md).
 5. **Somewhere to run TRELLIS and GroundingDINO** — either a [Modal](https://modal.com) account
    (recommended; free tier, no local GPU, works on macOS) or a Linux box with a ≥24 GB NVIDIA GPU.
    See [Install](#install) — this is the one real choice in the setup.
