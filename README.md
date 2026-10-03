@@ -14,7 +14,9 @@ An open-source, end-to-end toolkit for turning real-world scans into simulation-
   <a href="https://apps.apple.com/gb/app/litereality/id6774158260" alt="LiteReality Scanner">
     <img src="https://img.shields.io/badge/LiteReality%20Scanner-App%20Store-363634?logo=apple&logoColor=white">
   </a>
-  <img src="https://img.shields.io/badge/Technical%20Report-coming%20soon-lightgrey">
+  <a href="https://arxiv.org/abs/2610.01863">
+    <img alt="arXiv:2610.01863" src="https://img.shields.io/badge/arXiv-2610.01863-b31b1b">
+  </a>
 </p>
 
 <table align="center" width="100%">
@@ -34,7 +36,7 @@ An open-source, end-to-end toolkit for turning real-world scans into simulation-
 
 ## News
 
-
+- 📄 **2026-10-01 — Paper released.** Read [LiteReality-Agent on arXiv](https://arxiv.org/abs/2610.01863).
 - 🤖 **2026-09-12 — Simulation-ready release.** Every reconstructed room now loads as a MuJoCo scene:
   objects are rigid bodies with mass, colliders and joints, and the whole room exports to URDF and MJCF.
 - ⚙️ **2026-09-09 — Procedural reconstruction with sim-ready physics.** Articulated objects now carry
@@ -201,15 +203,20 @@ Tests marked `blender`, `scan`, or `live` are excluded by default.
 
 ## Citation
 
-A technical report is coming. In the meantime:
+If you use LiteReality-Agent in your research, please cite our [paper](https://arxiv.org/abs/2610.01863).
+You can also [download the BibTeX citation](citation.bib).
 
 ```bibtex
-@article{huang2026litereality-agent,
-  title   = {{LiteReality-Agent}: An Agentic System for
-             Interactable 3D Indoor Scene Reconstruction},
-  author  = {Huang, Zhening and Li, Yueyan and Chiu, Johnathan and
-             Lyu, Xiaoyang and Zhou, Matt and Yao, Yuxin and
-             Lasenby, Joan and Wu, Shangzhe},
-  year    = {2026}
+@misc{huang2026literealityagentagenticinteractable3d,
+  title         = {LiteReality-Agent: An Agentic System for
+                   Interactable 3D Indoor Scene Reconstruction},
+  author        = {Zhening Huang and Yueyan Li and Johnathan Chiu and
+                   Xiaoyang Lyu and Matt Zhou and Yuxin Yao and
+                   Joan Lasenby and Shangzhe Wu},
+  year          = {2026},
+  eprint        = {2610.01863},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2610.01863}
 }
 ```
