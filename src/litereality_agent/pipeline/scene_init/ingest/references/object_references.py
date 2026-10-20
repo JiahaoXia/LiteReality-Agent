@@ -373,6 +373,8 @@ def generate_for_scan(
                 )
                 image_model.normalize_reference(raw, normalized)
                 status = "ok"
+            except image_model.ImageGenConfigError:
+                raise  # no key or workspace: every object would fall back, so stop the run
             except Exception as exc:  # noqa: BLE001
                 status = "error_fallback"
                 error = str(exc)

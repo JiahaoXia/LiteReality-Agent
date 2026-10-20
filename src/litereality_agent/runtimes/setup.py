@@ -21,7 +21,11 @@ from pathlib import Path
 # surprise charge.
 TRELLIS_BUILD_ESTIMATE = "~11 minutes (one-time, per workspace, it will be around 3s in future runs)"
 
-APPS = (("dino", "deploy/modal/dino/app.py"), ("trellis", "deploy/modal/trellis/app.py"))
+APPS = (
+    ("dino", "deploy/modal/dino/app.py"),
+    ("trellis", "deploy/modal/trellis/app.py"),
+    ("image_edit", "deploy/modal/image_edit/app.py"),
+)
 
 
 class SetupError(RuntimeError):
@@ -85,7 +89,7 @@ def deploy(
     profile: str | None = None,
     credentials: tuple[str, str] | None = None,
 ) -> None:
-    """Deploy both model apps into the workspace the credentials identify."""
+    """Deploy every model app into the workspace the credentials identify."""
     env = {**os.environ}
     if credentials:
         env["MODAL_TOKEN_ID"], env["MODAL_TOKEN_SECRET"] = credentials

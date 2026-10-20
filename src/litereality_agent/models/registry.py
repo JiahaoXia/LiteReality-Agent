@@ -57,3 +57,19 @@ def detection_from_settings(settings: LiteRealitySettings | None = None):
 
         return DinoSubprocessService(python=str(settings.dino_python), model_id=settings.dino_model)
     return None
+
+
+def image_edit_from_settings(settings: LiteRealitySettings | None = None):
+    """The open-weights reference renderer. Modal only: it needs a ~60 GB GPU."""
+    settings = settings or load_settings()
+    if not settings.modal_configured():
+        return None
+    from litereality_agent.models.image_edit.modal import ModalImageEditService
+
+    return ModalImageEditService(
+        app_name=settings.modal_image_edit_app,
+        function_name=settings.modal_image_edit_function,
+        environment_name=settings.modal_environment,
+        profile=settings.modal_profile,
+        credentials=settings.modal_credentials(),
+    )

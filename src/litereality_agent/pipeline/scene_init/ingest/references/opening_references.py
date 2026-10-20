@@ -377,6 +377,8 @@ def generate_for_scan(
                         )
                         image_model.normalize_reference(raw, normalized)
                         status = "ok"
+                    except image_model.ImageGenConfigError:
+                        raise
                     except Exception as exc:  # noqa: BLE001
                         status, error = "error", str(exc)
 

@@ -47,6 +47,7 @@ The two commands `setup` wraps, if you would rather run them yourself:
 ```bash
 uv run modal deploy --env main deploy/modal/dino/app.py
 uv run modal deploy --env main deploy/modal/trellis/app.py
+uv run modal deploy --env main deploy/modal/image_edit/app.py
 ```
 
 These need credentials in the environment first — either the same `MODAL_TOKEN_ID` /
@@ -71,5 +72,5 @@ app with zero active containers does not consume GPU compute, though its stored 
 data remain.
 
 
-See [`dino/README.md`](dino/README.md) and [`trellis/README.md`](trellis/README.md) for model-specific
-details.
+See [`dino/README.md`](dino/README.md), [`trellis/README.md`](trellis/README.md) and
+[`image_edit/README.md`](image_edit/README.md) for model-specific details.

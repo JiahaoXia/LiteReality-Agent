@@ -106,6 +106,12 @@ class LiteRealitySettings(BaseSettings):
     )
     modal_dino_app: str = Field(default="litereality", validation_alias="MODAL_DINO_APP")
     modal_dino_function: str = Field(default="dino", validation_alias="MODAL_DINO_FUNCTION")
+    modal_image_edit_app: str = Field(
+        default="litereality", validation_alias="MODAL_IMAGE_EDIT_APP"
+    )
+    modal_image_edit_function: str = Field(
+        default="image_edit", validation_alias="MODAL_IMAGE_EDIT_FUNCTION"
+    )
     modal_environment: str = Field(default="main", validation_alias="MODAL_ENVIRONMENT")
     modal_profile: str | None = Field(default=None, validation_alias="MODAL_PROFILE")
     # Modal authenticates from either a token pair or a named profile in ~/.modal.toml. The token
@@ -225,6 +231,8 @@ class LiteRealitySettings(BaseSettings):
             "MODAL_TRELLIS_FUNCTION": self.modal_trellis_function,
             "MODAL_DINO_APP": self.modal_dino_app,
             "MODAL_DINO_FUNCTION": self.modal_dino_function,
+            "MODAL_IMAGE_EDIT_APP": self.modal_image_edit_app,
+            "MODAL_IMAGE_EDIT_FUNCTION": self.modal_image_edit_function,
             "MODAL_ENVIRONMENT": self.modal_environment,
             "MODAL_PROFILE": self.modal_profile,
         }

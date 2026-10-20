@@ -1,9 +1,11 @@
-"""Hosted reference-image generation, on OpenAI or Gemini.
+"""Reference-image generation, on OpenAI, Gemini, or open-weights Qwen-Image-Edit.
 
 One call per object: the evidence sheet plus the prompt go up, one clean object render comes back.
-Pick the backend with ``$LR_IMAGE_PROVIDER`` (``openai`` by default, or ``gemini``); naming a
-``gemini-*`` model is enough on its own. The retry ladder, telemetry, and black-background
-normalisation are shared, so the rest of the pipeline cannot tell which one produced a reference.
+Pick the backend with ``$LR_IMAGE_PROVIDER`` (``openai`` by default, ``gemini``, or ``qwen``);
+naming a ``gemini-*`` or ``Qwen/*`` model is enough on its own. ``qwen`` runs on the Modal
+workspace the other models use, so it needs no image-API key. The retry ladder, telemetry, and
+black-background normalisation are shared, so the rest of the pipeline cannot tell which one
+produced a reference.
 """
 
 from __future__ import annotations
@@ -22,6 +24,16 @@ from litereality_agent import telemetry
 
 DEFAULT_IMAGE_MODEL = "gpt-image-1"
 DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"
+PROVIDERS = ("openai", "gemini", "qwen")
+
+
+class ImageGenConfigError(RuntimeError):
+    """Image generation cannot work at all — no key, no credits, no Modal workspace.
+
+    Callers re-raise this instead of writing a placeholder reference. A per-object fallback is the
+    right answer to one bad call, but for a missing key it silently feeds TRELLIS the raw crop
+    collage for every object in the room. `--skip-image-generation` is the way to ask for that.
+    """
 
 
 def resolve_provider(model: str | None = None) -> str:
@@ -32,10 +44,12 @@ def resolve_provider(model: str | None = None) -> str:
     sending a Gemini model id to OpenAI and failing on an unhelpful 404.
     """
     explicit = (os.environ.get("LR_IMAGE_PROVIDER") or "").strip().lower()
-    if explicit in ("openai", "gemini"):
+    if explicit in PROVIDERS:
         return explicit
     name = (model or os.environ.get("LR_OPENAI_IMAGE_MODEL") or "").lower()
-    return "gemini" if name.startswith("gemini") else "openai"
+    if name.startswith("gemini"):
+        return "gemini"
+    return "qwen" if name.startswith(("qwen/", "qwen-image")) else "openai"
 
 # Reference generation is one hosted image call per object, ~45s each, and every caller had it in
 # a serial loop. The ceiling is OpenAI's rate limit, not local CPU, so the cap is about not opening
@@ -222,6 +236,41 @@ def _call_gemini(sheet_path, full_prompt, img_model, key, timeout):
     return png, usage, _gemini_cost_usd(usage), {}
 
 
+def _qwen_service():
+    """The Modal image-edit function, or an ImageGenConfigError saying how to get one."""
+    from litereality_agent.models.registry import image_edit_from_settings
+
+    try:
+        service = image_edit_from_settings()
+    except RuntimeError as exc:  # the modal extra is not installed
+        raise ImageGenConfigError(str(exc)) from exc
+    if service is None:
+        raise ImageGenConfigError(
+            "Qwen image generation runs on Modal: set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET "
+            "(or MODAL_PROFILE) and run `litereality setup` to deploy the image_edit function."
+        )
+    return service
+
+
+def _call_qwen(sheet_path, full_prompt, img_model, service):
+    """One Qwen-Image-Edit call on Modal. Returns (png_bytes, usage, cost_usd, extra_response_fields).
+
+    No token usage to report, and the cost is Modal GPU time rather than a per-image price, so it
+    is left at 0 rather than guessed.
+    """
+    png = service.edit([Path(sheet_path).read_bytes()], full_prompt, model_id=img_model)
+    return png, {}, 0.0, {}
+
+
+def _is_not_deployed(exc: BaseException | None) -> bool:
+    """Modal's lookup failure for a function the workspace never deployed — retrying cannot help."""
+    while exc is not None:
+        if type(exc).__name__ == "NotFoundError":
+            return True
+        exc = exc.__cause__
+    return False
+
+
 def generate_reference(
     sheet_path: Path,
     prompt: str,
@@ -243,10 +292,19 @@ def generate_reference(
         telemetry.on_image_generation(prompt, sheet_path, out_path, "skipped_exists", model=provider)
         return None
 
-    if provider == "gemini":
+    if provider == "qwen":
+        from litereality_agent.models.image_edit.inference import DEFAULT_MODEL as qwen_default
+
+        service = _qwen_service()
+        img_model = (os.environ.get("LR_QWEN_IMAGE_MODEL")
+                     or (model if (model or "").lower().startswith(("qwen/", "qwen-image")) else None)
+                     or qwen_default)
+        # Same black-background path as Gemini: the model has no transparency option.
+        use_transparent = False
+    elif provider == "gemini":
         key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not key:
-            raise RuntimeError("Gemini image generation needs $GEMINI_API_KEY.")
+            raise ImageGenConfigError("Gemini image generation needs $GEMINI_API_KEY.")
         img_model = (os.environ.get("LR_GEMINI_IMAGE_MODEL")
                      or (model if (model or "").lower().startswith("gemini") else None)
                      or DEFAULT_GEMINI_IMAGE_MODEL)
@@ -255,7 +313,7 @@ def generate_reference(
     else:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
-            raise RuntimeError("OpenAI image generation needs $OPENAI_API_KEY.")
+            raise ImageGenConfigError("OpenAI image generation needs $OPENAI_API_KEY.")
         img_model = os.environ.get("LR_OPENAI_IMAGE_MODEL") or model or DEFAULT_IMAGE_MODEL
         # gpt-image-2 rejects transparent backgrounds; only the gpt-image-1 family supports them.
         # With transparent we composite the exact object onto black; otherwise we ask the model for
@@ -281,7 +339,9 @@ def generate_reference(
     last_err = None
     for attempt in range(retries):
         try:
-            if provider == "gemini":
+            if provider == "qwen":
+                png, usage, cost, extra = _call_qwen(sheet_path, full_prompt, img_model, service)
+            elif provider == "gemini":
                 png, usage, cost, extra = _call_gemini(
                     sheet_path, full_prompt, img_model, key, timeout)
             else:
@@ -318,10 +378,15 @@ def generate_reference(
                     prompt, sheet_path, out_path, "error", model=label,
                     elapsed_sec=round(time.time() - call_t0, 3), error=str(last_err)[:400],
                 )
-                raise RuntimeError(
+                raise ImageGenConfigError(
                     "OpenAI has no credits remaining, so every reference from here will fail. "
                     "Top up at https://platform.openai.com/settings/organization/billing/ and "
                     f"re-run — finished references are kept and skipped. ({last_err})"
+                ) from exc
+            if provider == "qwen" and _is_not_deployed(exc):
+                raise ImageGenConfigError(
+                    "The Modal image_edit function is not deployed in this workspace; run "
+                    f"`litereality setup`. ({last_err})"
                 ) from exc
             if attempt == retries - 1:
                 break  # nothing left to wait for; the old code slept anyway

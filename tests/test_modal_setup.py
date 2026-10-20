@@ -48,7 +48,7 @@ def test_deploy_reports_a_missing_checkout(tmp_path):
         setup.deploy(tmp_path, "main", "team-a")
 
 
-def test_deploy_runs_both_apps_with_the_profile_pinned(tmp_path, monkeypatch):
+def test_deploy_runs_every_app_with_the_profile_pinned(tmp_path, monkeypatch):
     for _, relative in setup.APPS:
         app = tmp_path / relative
         app.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +63,7 @@ def test_deploy_runs_both_apps_with_the_profile_pinned(tmp_path, monkeypatch):
     monkeypatch.setattr(setup, "_run", fake_run)
     setup.deploy(tmp_path, "prod", "team-a")
 
-    assert len(calls) == 2
+    assert len(calls) == len(setup.APPS)
     for command, profile in calls:
         assert command[1:4] == ["-m", "modal", "deploy"]
         assert command[4:6] == ["--env", "prod"]
@@ -129,7 +129,7 @@ def test_deploy_passes_tokens_to_each_subprocess(tmp_path, monkeypatch):
 
     setup.deploy(tmp_path, "main", None, ("ak-1", "as-2"))
 
-    assert seen == [("ak-1", "as-2"), ("ak-1", "as-2")]
+    assert seen == [("ak-1", "as-2")] * len(setup.APPS)
 
 
 def test_settings_need_both_halves_of_the_token_pair():

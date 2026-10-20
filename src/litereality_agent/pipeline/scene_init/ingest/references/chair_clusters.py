@@ -590,6 +590,8 @@ def generate_for_cluster(
         image_model.normalize_reference(out, normalized)
         cluster["reference_1024"] = str(normalized.relative_to(output_root))
         cluster["reference_status"] = "ok"
+    except image_model.ImageGenConfigError:
+        raise
     except Exception as exc:  # noqa: BLE001
         cluster["reference_status"] = "error"
         cluster["reference_error"] = str(exc)
